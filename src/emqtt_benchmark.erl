@@ -51,17 +51,17 @@ init() ->
     ets:insert(?TAB, {sent, 0}).
 
 main_loop(Uptime, Count) ->
-	receive
-		{connected, _N, _Client} ->
-			io:format("conneted: ~w~n", [Count]),
-			main_loop(Uptime, Count+1);
+    receive
+        {connected, _N, _Client} ->
+            io:format("conneted: ~w~n", [Count]),
+            main_loop(Uptime, Count+1);
         stats ->
             print_stats(Uptime),
-			main_loop(Uptime, Count);
+            main_loop(Uptime, Count);
         Msg ->
             io:format("~p~n", [Msg]),
             main_loop(Uptime, Count)
-	end.
+    end.
 
 print_stats(Uptime) ->
     print_stats(Uptime, recv),
@@ -87,8 +87,8 @@ run(_Parent, 0, _PubSub, _Opts) ->
     done;
 run(Parent, N, PubSub, Opts) ->
     spawn(?MODULE, connect, [Parent, N, PubSub, Opts]),
-	timer:sleep(proplists:get_value(interval, Opts)),
-	run(Parent, N-1, PubSub, Opts).
+    timer:sleep(proplists:get_value(interval, Opts)),
+    run(Parent, N-1, PubSub, Opts).
     
 connect(Parent, N, PubSub, Opts) ->
     process_flag(trap_exit, true),
@@ -97,12 +97,13 @@ connect(Parent, N, PubSub, Opts) ->
     MqttOpts = [{client_id, ClientId} | mqtt_opts(Opts)],
     TcpOpts  = tcp_opts(Opts),
     AllOpts  = [{seq, N}, {client_id, ClientId} | Opts],
-	case emqttc:start_link(MqttOpts, TcpOpts) of
+    case emqttc:start_link(MqttOpts, TcpOpts) of
     {ok, Client} ->
         Parent ! {connected, N, Client},
         case PubSub of
             sub ->
-                subscribe(Client, AllOpts);
+                subscribe(Client, AllOpts),
+                timer:send_interval(30000, ping);
             pub ->
                Interval = proplists:get_value(interval_of_msg, Opts),
                timer:send_interval(Interval, publish)
@@ -114,6 +115,9 @@ connect(Parent, N, PubSub, Opts) ->
 
 loop(N, Client, PubSub, Opts) ->
     receive
+        ping -> 
+            ping(Client),
+            loop(N, Client, PubSub, Opts);
         publish ->
             publish(Client, Opts),
             ets:update_counter(?TAB, sent, {2, 1}),
@@ -123,7 +127,7 @@ loop(N, Client, PubSub, Opts) ->
             loop(N, Client, PubSub, Opts);
         {'EXIT', Client, Reason} ->
             io:format("client ~p EXIT: ~p~n", [N, Reason])
-	end.
+    end.
 
 subscribe(Client, Opts) ->
     Qos = proplists:get_value(qos, Opts),
@@ -134,6 +138,9 @@ publish(Client, Opts) ->
                {retain, proplists:get_value(retain, Opts)}],
     Payload = proplists:get_value(payload, Opts),
     emqttc:publish(Client, topic_opt(Opts), Payload, Flags).
+
+ping(Client) ->
+    emqttc:ping(Client).
 
 mqtt_opts(Opts) ->
     [{logger, error}|mqtt_opts(Opts, [])].
